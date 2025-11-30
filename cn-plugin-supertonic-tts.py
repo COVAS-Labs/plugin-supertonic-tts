@@ -300,10 +300,10 @@ class SupertonicPlugin(PluginBase):
     def __init__(self, plugin_manifest: PluginManifest):
         super().__init__(plugin_manifest)
         
-        self.settings = PluginSettings(
+        self.settings_config = PluginSettings(
             key="Supertonic TTS",
             label="Supertonic TTS",
-            icon="volume-high",
+            icon="volume_up",
             grids=[
                 SettingsGrid(
                     key="general",
@@ -316,7 +316,7 @@ class SupertonicPlugin(PluginBase):
                             readonly=False,
                             placeholder=None,
                             
-                            content="To use Supertonic TTS, select it as your *TTS provider* in *Advanced → TTS Settings*."
+                            content='To use Supertonic TTS, select it as your "TTS provider" in "Advanced" → "TTS Settings".'
                         ),
                     ]
                 ),
