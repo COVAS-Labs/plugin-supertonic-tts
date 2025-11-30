@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download models
+        run: |
+          mkdir -p model/voices
+          wget -P model https://huggingface.co/Supertone/supertonic/resolve/main/onnx/duration_predictor.onnx
+          wget -P model https://huggingface.co/Supertone/supertonic/resolve/main/onnx/text_encoder.onnx
+          wget -P model https://huggingface.co/Supertone/supertonic/resolve/main/onnx/vector_estimator.onnx
+          wget -P model https://huggingface.co/Supertone/supertonic/resolve/main/onnx/vocoder.onnx
+          wget -P model https://huggingface.co/Supertone/supertonic/resolve/main/onnx/tts.json
+          wget -P model https://huggingface.co/Supertone/supertonic/resolve/main/onnx/unicode_indexer.json
+
+          wget -P model/voices https://huggingface.co/Supertone/supertonic/resolve/main/voice_styles/F1.json
+          wget -P model/voices https://huggingface.co/Supertone/supertonic/resolve/main/voice_styles/F2.json
+          wget -P model/voices https://huggingface.co/Supertone/supertonic/resolve/main/voice_styles/M1.json
+          wget -P model/voices https://huggingface.co/Supertone/supertonic/resolve/main/voice_styles/M2.json
+
+      - name: Build plugin package
+        run: |
+          chmod +x pack.sh
+          ./pack.sh
+
+      - name: Rename artifact
+        run: mv dist/cn-plugin-supertonic-tts.zip dist/cn-plugin-supertonic-tts-linux.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: dist/*.zip
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download models
+        run: |
+          New-Item -ItemType Directory -Force -Path "model\voices"
+          $baseUrl = "https://huggingface.co/Supertone/supertonic/resolve/main/onnx"
+          $files = @("duration_predictor.onnx", "text_encoder.onnx", "vector_estimator.onnx", "vocoder.onnx", "tts.json", "unicode_indexer.json")
+          foreach ($file in $files) {
+              Invoke-WebRequest -Uri "$baseUrl/$file" -OutFile "model\$file"
+          }
+
+          $voiceUrl = "https://huggingface.co/Supertone/supertonic/resolve/main/voice_styles"
+          $voices = @("F1.json", "F2.json", "M1.json", "M2.json")
+          foreach ($voice in $voices) {
+              Invoke-WebRequest -Uri "$voiceUrl/$voice" -OutFile "model\voices\$voice"
+          }
+        shell: pwsh
+
+      - name: Build plugin package
+        run: ./pack.ps1
+        shell: pwsh
+
+      - name: Rename artifact
+        run: Rename-Item -Path "dist\cn-plugin-supertonic-ttsPlugin.zip" -NewName "cn-plugin-supertonic-tts-windows.zip"
+        shell: pwsh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: dist/*.zip
+
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-build
+          path: dist
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

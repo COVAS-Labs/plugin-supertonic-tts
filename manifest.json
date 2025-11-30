@@ -1,0 +1,9 @@
+{
+    "guid": "7fd3d108-4e50-49db-8eb4-f3b4b8d53e66",
+    "name": "COVAS:NEXT Plugin Supertonic TTS",
+    "version": "0.0.1",
+    "author": "lucaelin",
+    "repository": "https://github.com/COVAS-Labs/plugin-supertonic-tts",
+    "description": "Run TTS locally using Supertone Supertonic TTS",
+    "entrypoint": "cn-plugin-supertonic-tts.py"
+}
