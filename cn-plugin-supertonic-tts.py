@@ -260,6 +260,8 @@ class SupertonicTTSModel(TTSModel):
              raise RuntimeError("Supertonic TTS engine not initialized")
 
         target_voice = voice if voice else self.voice
+        if target_voice == 'nova':
+            target_voice = 'F1'  # Map 'nova' to 'F1' voice for OpenAI compatibility
         style = self._get_voice_style(target_voice)
         
         text_list = chunk_text(text)
