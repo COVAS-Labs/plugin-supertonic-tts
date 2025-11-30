@@ -15,6 +15,7 @@ from unicodedata import normalize
 
 from lib.PluginHelper import PluginHelper, TTSModel
 from lib.PluginSettingDefinitions import (
+    PluginSettings,
     ModelProviderDefinition,
     SettingsGrid,
     TextSetting,
@@ -292,6 +293,31 @@ class SupertonicPlugin(PluginBase):
     
     def __init__(self, plugin_manifest: PluginManifest):
         super().__init__(plugin_manifest)
+        
+        self.settings = {
+            PluginSettings(
+                key="Supertonic TTS",
+                label="Supertonic TTS",
+                icon="volume-high",
+                grids=[
+                    SettingsGrid(
+                        key="general",
+                        label="General",
+                        fields=[
+                            ParagraphSetting(
+                                key="info_text",
+                                label=None,
+                                type="paragraph",
+                                readonly=False,
+                                placeholder=None,
+                                
+                                content="To use Supertonic TTS, select it as your *TTS provider* in *Advanced → TTS Settings*."
+                            ),
+                        ]
+                    ),
+                ]
+            )
+        }
         
         self.model_providers = [
             ModelProviderDefinition(
