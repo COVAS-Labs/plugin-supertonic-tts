@@ -18,6 +18,7 @@ from lib.PluginSettingDefinitions import (
     PluginSettings,
     ModelProviderDefinition,
     SettingsGrid,
+    ParagraphSetting,
     TextSetting,
     NumericalSetting,
 )
