@@ -300,30 +300,29 @@ class SupertonicPlugin(PluginBase):
     def __init__(self, plugin_manifest: PluginManifest):
         super().__init__(plugin_manifest)
         
-        self.settings = {
-            PluginSettings(
-                key="Supertonic TTS",
-                label="Supertonic TTS",
-                icon="volume-high",
-                grids=[
-                    SettingsGrid(
-                        key="general",
-                        label="General",
-                        fields=[
-                            ParagraphSetting(
-                                key="info_text",
-                                label=None,
-                                type="paragraph",
-                                readonly=False,
-                                placeholder=None,
-                                
-                                content="To use Supertonic TTS, select it as your *TTS provider* in *Advanced → TTS Settings*."
-                            ),
-                        ]
-                    ),
-                ]
-            )
-        }
+        self.settings = PluginSettings(
+            key="Supertonic TTS",
+            label="Supertonic TTS",
+            icon="volume-high",
+            grids=[
+                SettingsGrid(
+                    key="general",
+                    label="General",
+                    fields=[
+                        ParagraphSetting(
+                            key="info_text",
+                            label=None,
+                            type="paragraph",
+                            readonly=False,
+                            placeholder=None,
+                            
+                            content="To use Supertonic TTS, select it as your *TTS provider* in *Advanced → TTS Settings*."
+                        ),
+                    ]
+                ),
+            ]
+        )
+        
         
         self.model_providers = [
             ModelProviderDefinition(
@@ -379,6 +378,9 @@ class SupertonicPlugin(PluginBase):
         raise ValueError(f'Unknown Supertonic provider: {provider_id}')
 
 if __name__ == "__main__":
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "deps")
     plugin_manifest = PluginManifest(
         name="Supertonic TTS Plugin",
         version="1.0.0",
