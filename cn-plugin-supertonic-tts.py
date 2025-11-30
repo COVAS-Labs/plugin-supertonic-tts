@@ -279,12 +279,17 @@ class SupertonicTTSModel(TTSModel):
                 samples = samplerate.resample(samples, 24000 / sample_rate, "sinc_best")
             
             samples_int16 = (samples * 32767).clip(-32768, 32767).astype(np.int16)
-            yield samples_int16.tobytes()
+            
+            # Yield in 100ms chunks (2400 samples at 24kHz)
+            chunk_size = 2400
+            for j in range(0, len(samples_int16), chunk_size):
+                yield samples_int16[j:j + chunk_size].tobytes()
             
             if i < len(text_list) - 1:
                 silence_samples = int(silence_duration * 24000)
                 silence = np.zeros(silence_samples, dtype=np.int16)
-                yield silence.tobytes()
+                for j in range(0, len(silence), chunk_size):
+                    yield silence[j:j + chunk_size].tobytes()
 
 class SupertonicPlugin(PluginBase):
     """
