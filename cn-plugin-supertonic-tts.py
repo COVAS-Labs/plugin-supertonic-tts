@@ -42,8 +42,8 @@ class UnicodeProcessor:
 
     def _text_to_unicode_values(self, text: str) -> np.ndarray:
         unicode_values = np.array(
-            [ord(char) for char in text], dtype=np.uint16
-        )  # 2 bytes
+            [ord(char) for char in text], dtype=np.uint32
+        )  # 4 bytes per unicode
         return unicode_values
 
     def __call__(self, text_list: list[str]) -> tuple[np.ndarray, np.ndarray]:
