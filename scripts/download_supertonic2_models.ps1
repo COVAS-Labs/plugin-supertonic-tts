@@ -23,8 +23,14 @@ $onnxFiles = @(
 $voiceFiles = @(
   "M1.json",
   "M2.json",
+  "M3.json",
+  "M4.json",
+  "M5.json",
   "F1.json",
-  "F2.json"
+  "F2.json",
+  "F3.json",
+  "F4.json",
+  "F5.json"
 )
 
 Write-Host "Downloading Supertonic 2 ONNX files to $ModelDir"

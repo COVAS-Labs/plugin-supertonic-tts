@@ -10,10 +10,8 @@ This plugin provides offline Text-to-Speech (TTS) capabilities for COVAS:NEXT us
 
 ### Voice Support
 The included model supports multiple voices:
-- **M1**: Male Voice 1
-- **M2**: Male Voice 2
-- **F1**: Female Voice 1
-- **F2**: Female Voice 2
+- **M1–M5**: Male voices
+- **F1–F5**: Female voices
 
 ## Features
 

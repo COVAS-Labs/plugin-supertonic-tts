@@ -26,7 +26,7 @@ from lib.PluginSettingDefinitions import (
     ModelProviderDefinition,
     SettingsGrid,
     ParagraphSetting,
-    TextSetting,
+    SelectSetting,
     NumericalSetting,
 )
 from lib.PluginBase import PluginBase, PluginManifest
@@ -302,6 +302,11 @@ class SupertonicPlugin(PluginBase):
     
     def __init__(self, plugin_manifest: PluginManifest):
         super().__init__(plugin_manifest)
+
+        plugin_dir = os.path.dirname(os.path.abspath(__file__))
+        model_dir = os.path.join(plugin_dir, "model")
+        voice_select_options = self._build_voice_select_options(model_dir)
+        language_select_options = self._build_language_select_options()
         
         self.settings_config = PluginSettings(
             key="Supertonic TTS",
@@ -337,27 +342,25 @@ class SupertonicPlugin(PluginBase):
                         key='settings',
                         label='Settings',
                         fields=[
-                            TextSetting(
+                            SelectSetting(
                                 key='voice',
-                                label='Voice style (M1, M2, F1, F2)',
-                                type='text',
+                                label='Voice style',
+                                type='select',
                                 readonly=False,
-                                placeholder='M1',
+                                placeholder=None,
                                 default_value='M1',
-                                max_length=None,
-                                min_length=None,
-                                hidden=False,
+                                select_options=voice_select_options,
+                                multi_select=False,
                             ),
-                            TextSetting(
+                            SelectSetting(
                                 key='language',
-                                label='Language (en, ko, es, pt, fr)',
-                                type='text',
+                                label='Language',
+                                type='select',
                                 readonly=False,
-                                placeholder='en',
+                                placeholder=None,
                                 default_value='en',
-                                max_length=None,
-                                min_length=None,
-                                hidden=False,
+                                select_options=language_select_options,
+                                multi_select=False,
                             ),
                             NumericalSetting(
                                 key='speed',
@@ -375,6 +378,63 @@ class SupertonicPlugin(PluginBase):
                 ]
             )
         ]
+
+    def _build_language_select_options(self) -> list[dict[str, object]]:
+        # SelectOption: { key, label, value, disabled }
+        labels = {
+            "en": "English (en)",
+            "ko": "Korean (ko)",
+            "es": "Spanish (es)",
+            "pt": "Portuguese (pt)",
+            "fr": "French (fr)",
+        }
+        options: list[dict[str, object]] = []
+        for lang in AVAILABLE_LANGS:
+            options.append(
+                {
+                    "key": lang,
+                    "label": labels.get(lang, lang),
+                    "value": lang,
+                    "disabled": False,
+                }
+            )
+        return options
+
+    def _build_voice_select_options(self, model_dir: str) -> list[dict[str, object]]:
+        # Voice files are shipped as JSON in model/voices (or model/voice_styles).
+        voice_dir_candidates = [
+            os.path.join(model_dir, "voices"),
+            os.path.join(model_dir, "voice_styles"),
+        ]
+        voice_dir = next((d for d in voice_dir_candidates if os.path.isdir(d)), None)
+        if voice_dir is None:
+            raise FileNotFoundError(
+                f"Could not find voice styles directory in {voice_dir_candidates}. "
+                "Expected model/voice_styles or model/voices"
+            )
+
+        names: list[str] = []
+        for fname in os.listdir(voice_dir):
+            if not fname.lower().endswith(".json"):
+                continue
+            if fname.startswith("."):
+                continue
+            names.append(os.path.splitext(fname)[0])
+
+        def _sort_key(name: str) -> tuple[int, int, str]:
+            m = re.match(r"^([MmFf])(\d+)$", name)
+            if m:
+                gender = m.group(1).upper()
+                num = int(m.group(2))
+                gender_rank = 0 if gender == "M" else 1
+                return (0, gender_rank * 100 + num, name)
+            return (1, 9999, name)
+
+        names = sorted(set(names), key=_sort_key)
+        if not names:
+            names = ["M1"]
+
+        return [{"key": v, "label": v, "value": v, "disabled": False} for v in names]
 
     @override
     def create_model(self, provider_id: str, settings: dict[str, Any]) -> TTSModel:
