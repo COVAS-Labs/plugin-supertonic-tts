@@ -22,19 +22,7 @@ jobs:
           python-version: "3.12"
 
       - name: Download models
-        run: |
-          mkdir -p model/voices
-          wget -P model https://huggingface.co/Supertone/supertonic/resolve/main/onnx/duration_predictor.onnx
-          wget -P model https://huggingface.co/Supertone/supertonic/resolve/main/onnx/text_encoder.onnx
-          wget -P model https://huggingface.co/Supertone/supertonic/resolve/main/onnx/vector_estimator.onnx
-          wget -P model https://huggingface.co/Supertone/supertonic/resolve/main/onnx/vocoder.onnx
-          wget -P model https://huggingface.co/Supertone/supertonic/resolve/main/onnx/tts.json
-          wget -P model https://huggingface.co/Supertone/supertonic/resolve/main/onnx/unicode_indexer.json
-
-          wget -P model/voices https://huggingface.co/Supertone/supertonic/resolve/main/voice_styles/F1.json
-          wget -P model/voices https://huggingface.co/Supertone/supertonic/resolve/main/voice_styles/F2.json
-          wget -P model/voices https://huggingface.co/Supertone/supertonic/resolve/main/voice_styles/M1.json
-          wget -P model/voices https://huggingface.co/Supertone/supertonic/resolve/main/voice_styles/M2.json
+        run: ./scripts/download_supertonic2_models.sh
 
       - name: Build plugin package
         run: |
@@ -63,19 +51,7 @@ jobs:
           python-version: "3.12"
 
       - name: Download models
-        run: |
-          New-Item -ItemType Directory -Force -Path "model\voices"
-          $baseUrl = "https://huggingface.co/Supertone/supertonic/resolve/main/onnx"
-          $files = @("duration_predictor.onnx", "text_encoder.onnx", "vector_estimator.onnx", "vocoder.onnx", "tts.json", "unicode_indexer.json")
-          foreach ($file in $files) {
-              Invoke-WebRequest -Uri "$baseUrl/$file" -OutFile "model\$file"
-          }
-
-          $voiceUrl = "https://huggingface.co/Supertone/supertonic/resolve/main/voice_styles"
-          $voices = @("F1.json", "F2.json", "M1.json", "M2.json")
-          foreach ($voice in $voices) {
-              Invoke-WebRequest -Uri "$voiceUrl/$voice" -OutFile "model\voices\$voice"
-          }
+        run: .\scripts\download_supertonic2_models.ps1
         shell: pwsh
 
       - name: Build plugin package

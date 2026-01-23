@@ -6,12 +6,19 @@ Provides offline Text-to-Speech capabilities using the Supertonic model.
 
 from typing import override, Iterable, Any, Optional
 import os
-import json
 import re
 import numpy as np
-import onnxruntime as ort
 import samplerate
-from unicodedata import normalize
+
+# Use upstream (MIT-licensed) Supertonic 2 helper implementation, vendored into this plugin.
+from .vendor.supertone_supertonic_py.helper import (
+    AVAILABLE_LANGS,
+    TextToSpeech,
+    Style,
+    chunk_text,
+    load_text_to_speech,
+    load_voice_style,
+)
 
 from lib.PluginHelper import PluginHelper, TTSModel
 from lib.PluginSettingDefinitions import (
@@ -25,174 +32,29 @@ from lib.PluginSettingDefinitions import (
 from lib.PluginBase import PluginBase, PluginManifest
 from lib.Logger import log
 
-# --- Helper Classes ---
-
-class UnicodeProcessor:
-    def __init__(self, unicode_indexer_path: str):
-        with open(unicode_indexer_path, "r") as f:
-            self.indexer = json.load(f)
-
-    def _preprocess_text(self, text: str) -> str:
-        text = normalize("NFKD", text)
-        return text
-
-    def _get_text_mask(self, text_ids_lengths: np.ndarray) -> np.ndarray:
-        text_mask = length_to_mask(text_ids_lengths)
-        return text_mask
-
-    def _text_to_unicode_values(self, text: str) -> np.ndarray:
-        unicode_values = np.array(
-            [ord(char) for char in text], dtype=np.uint32
-        )  # 4 bytes per unicode
-        return unicode_values
-
-    def __call__(self, text_list: list[str]) -> tuple[np.ndarray, np.ndarray]:
-        text_list = [self._preprocess_text(t) for t in text_list]
-        text_ids_lengths = np.array([len(text) for text in text_list], dtype=np.int64)
-        text_ids = np.zeros((len(text_list), text_ids_lengths.max()), dtype=np.int64)
-        for i, text in enumerate(text_list):
-            unicode_vals = self._text_to_unicode_values(text)
-            text_ids[i, : len(unicode_vals)] = np.array(
-                [self.indexer[val] for val in unicode_vals], dtype=np.int64
-            )
-        text_mask = self._get_text_mask(text_ids_lengths)
-        return text_ids, text_mask
-
-class Style:
-    def __init__(self, style_ttl_onnx: np.ndarray, style_dp_onnx: np.ndarray):
-        self.ttl = style_ttl_onnx
-        self.dp = style_dp_onnx
-
-class TextToSpeech:
-    def __init__(self,
-        cfgs: dict,
-        text_processor: UnicodeProcessor,
-        dp_ort: ort.InferenceSession,
-        text_enc_ort: ort.InferenceSession,
-        vector_est_ort: ort.InferenceSession,
-        vocoder_ort: ort.InferenceSession,
-    ):
-        self.cfgs = cfgs
-        self.text_processor = text_processor
-        self.dp_ort = dp_ort
-        self.text_enc_ort = text_enc_ort
-        self.vector_est_ort = vector_est_ort
-        self.vocoder_ort = vocoder_ort
-        self.sample_rate = cfgs["ae"]["sample_rate"]
-        self.base_chunk_size = cfgs["ae"]["base_chunk_size"]
-        self.chunk_compress_factor = cfgs["ttl"]["chunk_compress_factor"]
-        self.ldim = cfgs["ttl"]["latent_dim"]
-
-    def sample_noisy_latent(
-        self, duration: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray]:
-        bsz = len(duration)
-        wav_len_max = duration.max() * self.sample_rate
-        wav_lengths = (duration * self.sample_rate).astype(np.int64)
-        chunk_size = self.base_chunk_size * self.chunk_compress_factor
-        latent_len = ((wav_len_max + chunk_size - 1) / chunk_size).astype(np.int32)
-        latent_dim = self.ldim * self.chunk_compress_factor
-        noisy_latent = np.random.randn(bsz, latent_dim, latent_len).astype(np.float32)
-        latent_mask = get_latent_mask(
-            wav_lengths, self.base_chunk_size, self.chunk_compress_factor
-        )
-        noisy_latent = noisy_latent * latent_mask
-        return noisy_latent, latent_mask
-
-    def _infer(
-        self, text_list: list[str], style: Style, total_step: int, speed: float = 1.05
-    ) -> tuple[np.ndarray, np.ndarray]:
-        assert (
-            len(text_list) == style.ttl.shape[0]
-        ), "Number of texts must match number of style vectors"
-        bsz = len(text_list)
-        text_ids, text_mask = self.text_processor(text_list)
-        dur_onnx, *_ = self.dp_ort.run(
-            None, {"text_ids": text_ids, "style_dp": style.dp, "text_mask": text_mask}
-        )
-        dur_onnx = dur_onnx / speed
-        text_emb_onnx, *_ = self.text_enc_ort.run(
-            None,
-            {"text_ids": text_ids, "style_ttl": style.ttl, "text_mask": text_mask},
-        )
-        xt, latent_mask = self.sample_noisy_latent(dur_onnx)
-        total_step_np = np.array([total_step] * bsz, dtype=np.float32)
-        for step in range(total_step):
-            current_step = np.array([step] * bsz, dtype=np.float32)
-            xt, *_ = self.vector_est_ort.run(
-                None,
-                {
-                    "noisy_latent": xt,
-                    "text_emb": text_emb_onnx,
-                    "style_ttl": style.ttl,
-                    "text_mask": text_mask,
-                    "latent_mask": latent_mask,
-                    "current_step": current_step,
-                    "total_step": total_step_np,
-                },
-            )
-        wav, *_ = self.vocoder_ort.run(None, {"latent": xt})
-        return wav, dur_onnx
-
-
-def length_to_mask(lengths: np.ndarray, max_len: Optional[int] = None) -> np.ndarray:
-    max_len = max_len or lengths.max()
-    ids = np.arange(0, max_len)
-    mask = (ids < np.expand_dims(lengths, axis=1)).astype(np.float32)
-    return mask.reshape(-1, 1, max_len)
-
-def get_latent_mask(
-    wav_lengths: np.ndarray, base_chunk_size: int, chunk_compress_factor: int
-) -> np.ndarray:
-    latent_size = base_chunk_size * chunk_compress_factor
-    latent_lengths = (wav_lengths + latent_size - 1) // latent_size
-    latent_mask = length_to_mask(latent_lengths)
-    return latent_mask
-
-def chunk_text(text: str, max_len: int = 300) -> list[str]:
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", text.strip()) if p.strip()]
-    chunks = []
-    for paragraph in paragraphs:
-        paragraph = paragraph.strip()
-        if not paragraph:
-            continue
-        pattern = r"(?<!Mr\.)(?<!Mrs\.)(?<!Ms\.)(?<!Dr\.)(?<!Prof\.)(?<!Sr\.)(?<!Jr\.)(?<!Ph\.D\.)(?<!etc\.)(?<!e\.g\.)(?<!i\.e\.)(?<!vs\.)(?<!Inc\.)(?<!Ltd\.)(?<!Co\.)(?<!Corp\.)(?<!St\.)(?<!Ave\.)(?<!Blvd\.)(?<!\b[A-Z]\.)(?<=[.!?])\s+"
-        sentences = re.split(pattern, paragraph)
-        current_chunk = ""
-        for sentence in sentences:
-            if len(current_chunk) + len(sentence) + 1 <= max_len:
-                current_chunk += (" " if current_chunk else "") + sentence
-            else:
-                if current_chunk:
-                    chunks.append(current_chunk.strip())
-                current_chunk = sentence
-        if current_chunk:
-            chunks.append(current_chunk.strip())
-    return chunks
-
-def load_voice_style(voice_style_path: str) -> Style:
-    with open(voice_style_path, "r") as f:
-        voice_style = json.load(f)
-    ttl_dims = voice_style["style_ttl"]["dims"]
-    dp_dims = voice_style["style_dp"]["dims"]
-    ttl_data = np.array(voice_style["style_ttl"]["data"], dtype=np.float32).flatten()
-    ttl_style = ttl_data.reshape(1, ttl_dims[1], ttl_dims[2])
-    dp_data = np.array(voice_style["style_dp"]["data"], dtype=np.float32).flatten()
-    dp_style = dp_data.reshape(1, dp_dims[1], dp_dims[2])
-    return Style(ttl_style, dp_style)
+"""Plugin implementation."""
 
 # --- Plugin Implementation ---
 
 class SupertonicTTSModel(TTSModel):
     """Supertonic Text-to-Speech model implementation."""
     
-    def __init__(self, model_dir: str, voice: str = "M1", speed: float = 1.0):
+    def __init__(
+        self,
+        model_dir: str,
+        voice: str = "M1",
+        speed: float = 1.05,
+        language: str = "en",
+    ):
         super().__init__("supertonic-tts")
         self.model_dir = model_dir
         self.voice = voice
         self.speed = speed
+        self.language = language
         self._tts_engine: Optional[TextToSpeech] = None
         self._voices: dict[str, Style] = {}
+        self._onnx_dir: Optional[str] = None
+        self._voice_dir: Optional[str] = None
         
     def _load_models(self):
         if self._tts_engine is not None:
@@ -201,59 +63,177 @@ class SupertonicTTSModel(TTSModel):
         log('info', f"Loading Supertonic models from {self.model_dir}")
         
         try:
-            paths = {
-                "duration_predictor": os.path.join(self.model_dir, "duration_predictor.onnx"),
-                "text_encoder": os.path.join(self.model_dir, "text_encoder.onnx"),
-                "vector_estimator": os.path.join(self.model_dir, "vector_estimator.onnx"),
-                "vocoder": os.path.join(self.model_dir, "vocoder.onnx"),
-                "config": os.path.join(self.model_dir, "tts.json"),
-                "indexer": os.path.join(self.model_dir, "unicode_indexer.json")
-            }
-            
-            for name, path in paths.items():
-                if not os.path.exists(path):
-                    raise FileNotFoundError(f"Model file not found: {path}")
+            onnx_dir_candidates = [os.path.join(self.model_dir, "onnx"), self.model_dir]
+            onnx_dir = None
+            for candidate in onnx_dir_candidates:
+                required = [
+                    os.path.join(candidate, "duration_predictor.onnx"),
+                    os.path.join(candidate, "text_encoder.onnx"),
+                    os.path.join(candidate, "vector_estimator.onnx"),
+                    os.path.join(candidate, "vocoder.onnx"),
+                    os.path.join(candidate, "tts.json"),
+                    os.path.join(candidate, "unicode_indexer.json"),
+                ]
+                if all(os.path.exists(p) for p in required):
+                    onnx_dir = candidate
+                    break
+            if onnx_dir is None:
+                raise FileNotFoundError(
+                    f"Could not find a valid Supertonic ONNX directory in {onnx_dir_candidates}. "
+                    "Expected duration_predictor.onnx, text_encoder.onnx, vector_estimator.onnx, vocoder.onnx, tts.json, unicode_indexer.json"
+                )
 
-            with open(paths["config"], "r") as f:
-                cfgs = json.load(f)
-                
-            text_processor = UnicodeProcessor(paths["indexer"])
-            
-            opts = ort.SessionOptions()
-            providers = ["CPUExecutionProvider"]
-            if "CUDAExecutionProvider" in ort.get_available_providers():
-                providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-                log('info', "Supertonic: Using GPU for inference")
-            else:
-                log('info', "Supertonic: Using CPU for inference")
+            voice_dir_candidates = [
+                os.path.join(self.model_dir, "voice_styles"),
+                os.path.join(self.model_dir, "voices"),
+            ]
+            voice_dir = next((d for d in voice_dir_candidates if os.path.isdir(d)), None)
+            if voice_dir is None:
+                raise FileNotFoundError(
+                    f"Could not find voice styles directory in {voice_dir_candidates}. "
+                    "Expected model/voice_styles or model/voices"
+                )
 
-            dp_ort = ort.InferenceSession(paths["duration_predictor"], sess_options=opts, providers=providers)
-            text_enc_ort = ort.InferenceSession(paths["text_encoder"], sess_options=opts, providers=providers)
-            vector_est_ort = ort.InferenceSession(paths["vector_estimator"], sess_options=opts, providers=providers)
-            vocoder_ort = ort.InferenceSession(paths["vocoder"], sess_options=opts, providers=providers)
-            
-            self._tts_engine = TextToSpeech(
-                cfgs, text_processor, dp_ort, text_enc_ort, vector_est_ort, vocoder_ort
-            )
+            self._onnx_dir = onnx_dir
+            self._voice_dir = voice_dir
+
+            # Upstream helper handles model/config/indexer/session loading.
+            # GPU mode is intentionally disabled (upstream marks it as not fully tested).
+            log('info', "Supertonic: Using CPU for inference")
+            self._tts_engine = load_text_to_speech(onnx_dir, use_gpu=False)
             
         except Exception as e:
             log('error', f"Failed to load Supertonic models: {e}")
             raise
 
     def _get_voice_style(self, voice_name: str) -> Style:
-        if voice_name in self._voices:
-            return self._voices[voice_name]
-            
-        voice_path = os.path.join(self.model_dir, "voices", f"{voice_name}.json")
-        if not os.path.exists(voice_path):
-            log('warning', f"Voice {voice_name} not found at {voice_path}, trying M1")
-            voice_path = os.path.join(self.model_dir, "voices", "M1.json")
-            if not os.path.exists(voice_path):
-                 raise FileNotFoundError(f"Voice file not found: {voice_path}")
-        
-        style = load_voice_style(voice_path)
-        self._voices[voice_name] = style
+        voice_dir = self._voice_dir or os.path.join(self.model_dir, "voices")
+
+        # COVAS may pass through provider-agnostic voice names.
+        # Map common aliases to Supertonic voice presets when possible.
+        alias_map = {
+            "nova": "F1",
+            "alloy": "M1",
+            "echo": "M2",
+            # Map other common OpenAI-style names to the closest available presets.
+            "fable": "M1",
+            "onyx": "M2",
+            "shimmer": "F2",
+        }
+
+        requested = (voice_name or "").strip()
+        mapped = alias_map.get(requested.lower(), requested)
+
+        def _voice_path_for(name: str) -> str:
+            fname = name if name.lower().endswith(".json") else f"{name}.json"
+            return os.path.join(voice_dir, fname)
+
+        # Resolve to an existing JSON file.
+        candidates: list[str] = []
+        if mapped:
+            candidates.append(mapped)
+        if requested and requested != mapped:
+            candidates.append(requested)
+
+        configured_default = (self.voice or "").strip() or "M1"
+        if configured_default not in candidates:
+            candidates.append(configured_default)
+        if "M1" not in candidates:
+            candidates.append("M1")
+
+        resolved_name = None
+        resolved_path = None
+        for candidate in candidates:
+            candidate_path = _voice_path_for(candidate)
+            if os.path.exists(candidate_path):
+                resolved_name = candidate
+                resolved_path = candidate_path
+                break
+
+        if resolved_name is None or resolved_path is None:
+            raise FileNotFoundError(
+                f"No voice style JSON found. Tried: {', '.join(_voice_path_for(c) for c in candidates)}"
+            )
+
+        if resolved_name in self._voices:
+            return self._voices[resolved_name]
+
+        if requested and resolved_name.lower() != requested.lower():
+            log('info', f"Using voice '{resolved_name}' (requested '{requested}')")
+
+        style = load_voice_style([resolved_path], verbose=False)
+        self._voices[resolved_name] = style
         return style
+
+    def _normalize_numbers(self, text: str, lang: str) -> str:
+        """Convert standalone numeric tokens to localized words when possible.
+
+        Supertonic's character-level model can produce unstable output on raw digits
+        in some cases; converting to words improves pronunciation stability.
+        """
+
+        try:
+            from num2words import num2words  # type: ignore
+        except Exception:
+            return text
+
+        lang = (lang or "en").strip().lower()
+        lang_map = {
+            "en": "en",
+            "ko": "ko",
+            "es": "es",
+            "pt": "pt",
+            "fr": "fr",
+        }
+        target_lang = lang_map.get(lang, "en")
+
+        decimal_comma_langs = {"fr", "es", "pt"}
+
+        # Match standalone numeric tokens (no adjacent letters/underscore).
+        number_pattern = re.compile(r"(?<![\w])([+-]?\d+(?:[\.,]\d+)*)(?![\w])")
+
+        def _parse_number_token(token: str) -> int | float | None:
+            raw = token.replace(" ", "")
+
+            if lang in decimal_comma_langs:
+                # Treat ',' as decimal separator; drop '.' thousand separators.
+                raw = raw.replace(".", "")
+                raw = raw.replace(",", ".")
+            else:
+                # Treat '.' as decimal separator; drop ',' thousand separators.
+                raw = raw.replace(",", "")
+
+            try:
+                if "." in raw:
+                    return float(raw)
+                return int(raw)
+            except Exception:
+                return None
+
+        def _replace(match: re.Match[str]) -> str:
+            token = match.group(1)
+
+            # Skip common date/time patterns like 2026-01-23 or 3:45.
+            end = match.end(1)
+            start = match.start(1)
+            if end < len(text) and text[end] in "-/:" and end + 1 < len(text) and text[end + 1].isdigit():
+                return token
+            if start > 0 and text[start - 1] in "-/:" and start - 2 >= 0 and text[start - 2].isdigit():
+                return token
+
+            value = _parse_number_token(token)
+            if value is None:
+                return token
+
+            try:
+                spoken = num2words(value, lang=target_lang)
+            except Exception:
+                return token
+
+            spoken = re.sub(r"\s+", " ", str(spoken)).strip()
+            return spoken
+
+        return number_pattern.sub(_replace, text)
 
     @override
     def synthesize(self, text: str, voice: str) -> Iterable[bytes]:
@@ -261,22 +241,45 @@ class SupertonicTTSModel(TTSModel):
         if self._tts_engine is None:
              raise RuntimeError("Supertonic TTS engine not initialized")
 
+        lang = (self.language or "en").strip().lower()
+        if lang not in AVAILABLE_LANGS:
+            log('warning', f"Unsupported language '{lang}', falling back to 'en'")
+            lang = "en"
+
+        # Prefer explicitly requested voice if it resolves, otherwise fall back to configured default.
         target_voice = voice if voice else self.voice
-        if target_voice == 'nova':
-            target_voice = 'F1'  # Map 'nova' to 'F1' voice for OpenAI compatibility
         style = self._get_voice_style(target_voice)
         
-        text_list = chunk_text(text)
+        max_len = 120 if lang == "ko" else 300
+        text = self._normalize_numbers(text, lang)
+        text_list = chunk_text(text, max_len=max_len)
         total_step = 5
         silence_duration = 0.3
         
         for i, chunk in enumerate(text_list):
-            wav, dur_onnx = self._tts_engine._infer([chunk], style, total_step, self.speed)
-            
-            samples = wav.flatten()
+            wav, dur_onnx = self._tts_engine._infer([chunk], [lang], style, total_step, self.speed)
+
+            # Trim vocoder output to predicted duration (matches upstream examples)
+            try:
+                dur_seconds = float(np.asarray(dur_onnx).reshape(-1)[0])
+            except Exception:
+                dur_seconds = float(dur_onnx)
+            wav_len = int(self._tts_engine.sample_rate * max(dur_seconds, 0.0))
+            wav_2d = np.asarray(wav)
+            if wav_2d.ndim == 2:
+                wav_1d = wav_2d[0, : min(wav_len, wav_2d.shape[1])]
+            else:
+                wav_1d = wav_2d.reshape(-1)[:wav_len]
+
+            samples = wav_1d
             sample_rate = self._tts_engine.sample_rate
             
             if sample_rate != 24000:
+                if samplerate is None:
+                    raise RuntimeError(
+                        "Resampling required (model sample_rate != 24000) but 'samplerate' is not available. "
+                        "Install dependencies (or use a 24kHz model) to proceed."
+                    )
                 samples = samplerate.resample(samples, 24000 / sample_rate, "sinc_best")
             
             samples_int16 = (samples * 32767).clip(-32768, 32767).astype(np.int16)
@@ -336,11 +339,22 @@ class SupertonicPlugin(PluginBase):
                         fields=[
                             TextSetting(
                                 key='voice',
-                                label='Voice (M1, M2, F1, F2)',
+                                label='Voice style (M1, M2, F1, F2)',
                                 type='text',
                                 readonly=False,
                                 placeholder='M1',
                                 default_value='M1',
+                                max_length=None,
+                                min_length=None,
+                                hidden=False,
+                            ),
+                            TextSetting(
+                                key='language',
+                                label='Language (en, ko, es, pt, fr)',
+                                type='text',
+                                readonly=False,
+                                placeholder='en',
+                                default_value='en',
                                 max_length=None,
                                 min_length=None,
                                 hidden=False,
@@ -350,10 +364,10 @@ class SupertonicPlugin(PluginBase):
                                 label='Speed',
                                 type='number',
                                 readonly=False,
-                                placeholder='1.0',
-                                default_value=1.0,
-                                min_value=0.5,
-                                max_value=2.0,
+                                placeholder='1.05',
+                                default_value=1.05,
+                                min_value=0.8,
+                                max_value=1.8,
                                 step=0.1,
                             )
                         ]
@@ -371,9 +385,10 @@ class SupertonicPlugin(PluginBase):
             model_dir = os.path.join(plugin_dir, "model")
             
             voice = settings.get('voice', 'M1')
+            language = settings.get('language', 'en')
             speed = float(settings.get('speed', 1.0))
             
-            return SupertonicTTSModel(model_dir=model_dir, voice=voice, speed=speed)
+            return SupertonicTTSModel(model_dir=model_dir, voice=voice, speed=speed, language=language)
             
         raise ValueError(f'Unknown Supertonic provider: {provider_id}')
 

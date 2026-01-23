@@ -6,7 +6,7 @@ Run TTS locally using Supertone Supertonic TTS models via ONNX Runtime.
 
 This plugin provides offline Text-to-Speech (TTS) capabilities for COVAS:NEXT using the **Supertonic** model. This allows for high-quality, **ultra low-latency** speech synthesis **even on slow systems**, without requiring an internet connection.
 
-**Note:** The model is currently limited to **English** output only.
+**Note:** Supertonic 2 supports multiple languages: `en`, `ko`, `es`, `pt`, `fr`.
 
 ### Voice Support
 The included model supports multiple voices:
@@ -20,6 +20,7 @@ The included model supports multiple voices:
 - **Offline Synthesis**: No internet connection required.
 - **High Quality**: Uses Supertone's Supertonic architecture.
 - **Efficient**: Runs on CPU using ONNX Runtime.
+- **Number Handling**: Converts digits to spoken words (localized to the selected language) to avoid unstable pronunciation on raw numeric tokens.
 
 ## Installation
 
@@ -47,6 +48,14 @@ Follow the [COVAS:NEXT Plugin Development Guide](https://ratherrude.github.io/El
 
 ## Packaging
 Use the `./pack.ps1` or `./pack.sh` scripts to package the plugin and any Python dependencies in the `deps` folder.
+
+If the Supertonic 2 model files are not present, the pack scripts will automatically download them into the *existing* layout:
+- `model/*.onnx`, `model/tts.json`, `model/unicode_indexer.json`
+- `model/voices/*.json`
+
+You can also download the model files explicitly:
+- Linux/macOS: `./scripts/download_supertonic2_models.sh`
+- Windows: `./scripts/download_supertonic2_models.ps1`
 
 ## Releasing
 This project includes a GitHub Actions workflow that automatically creates releases. To create a new release:

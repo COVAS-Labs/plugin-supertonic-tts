@@ -11,6 +11,17 @@ if (Test-Path "requirements.txt") {
     pip install --target ./deps -r requirements.txt
 }
 
+# Ensure Supertonic 2 models are present (historical layout)
+if (-not (Test-Path "model\duration_predictor.onnx")) {
+    if (Test-Path "scripts\download_supertonic2_models.ps1") {
+        Write-Host "Supertonic 2 model files not found; downloading into .\model ..."
+        .\scripts\download_supertonic2_models.ps1
+    }
+    else {
+        throw "Missing model\*.onnx and scripts\download_supertonic2_models.ps1 not found."
+    }
+}
+
 # Remember to add any additional files, and change the name of the plugin
 $artifacts = "cn-plugin-supertonic-tts.py", "requirements.txt", "manifest.json", "__init__.py"
 
@@ -20,6 +31,10 @@ if (Test-Path "deps") {
 
 if (Test-Path "model") {
     $artifacts += "model"
+}
+
+if (Test-Path "vendor") {
+    $artifacts += "vendor"
 }
 
 $compress = @{
