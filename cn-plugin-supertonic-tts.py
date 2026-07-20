@@ -336,7 +336,7 @@ class SupertonicPlugin(PluginBase):
             ModelProviderDefinition(
                 kind='tts',
                 id='supertonic-tts',
-                label='Supertonic TTS (Offline)',
+                label='Supertonic (Local)',
                 settings_config=[
                     SettingsGrid(
                         key='settings',
@@ -458,7 +458,7 @@ if __name__ == "__main__":
     sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "deps")
     plugin_manifest = PluginManifest(
         name="Supertonic TTS Plugin",
-        version="1.0.0",
+        version="0.1.2",
         author="COVAS:NEXT",
         description="Supertonic TTS Plugin for COVAS:NEXT"
     )
@@ -468,5 +468,3 @@ if __name__ == "__main__":
         log('info', "Supertonic TTS Plugin initialized successfully.")
     except Exception as e:
         log('error', f"Failed to initialize plugin: {e}")
-
-
