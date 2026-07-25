@@ -319,8 +319,12 @@ def load_text_processor(onnx_dir: str) -> UnicodeProcessor:
     return text_processor
 
 
-def load_text_to_speech(onnx_dir: str, use_gpu: bool = False) -> TextToSpeech:
+def load_text_to_speech(
+    onnx_dir: str, use_gpu: bool = False, num_threads: int = max(1, (os.cpu_count() or 1) // 2)
+) -> TextToSpeech:
     opts = ort.SessionOptions()
+    opts.intra_op_num_threads = max(1, int(num_threads))
+    opts.inter_op_num_threads = 1
     if use_gpu:
         raise NotImplementedError("GPU mode is not fully tested")
     else:

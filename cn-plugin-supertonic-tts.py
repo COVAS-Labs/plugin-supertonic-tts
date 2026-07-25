@@ -32,6 +32,8 @@ from lib.PluginSettingDefinitions import (
 from lib.PluginBase import PluginBase, PluginManifest
 from lib.Logger import log
 
+DEFAULT_ONNX_THREADS = max(1, (os.cpu_count() or 1) // 2)
+
 """Plugin implementation."""
 
 # --- Plugin Implementation ---
@@ -45,12 +47,14 @@ class SupertonicTTSModel(TTSModel):
         voice: str = "M1",
         speed: float = 1.05,
         language: str = "en",
+        onnx_threads: int = DEFAULT_ONNX_THREADS,
     ):
         super().__init__("supertonic-tts")
         self.model_dir = model_dir
         self.voice = voice
         self.speed = speed
         self.language = language
+        self.onnx_threads = max(1, int(onnx_threads))
         self._tts_engine: Optional[TextToSpeech] = None
         self._voices: dict[str, Style] = {}
         self._onnx_dir: Optional[str] = None
@@ -100,7 +104,7 @@ class SupertonicTTSModel(TTSModel):
             # Upstream helper handles model/config/indexer/session loading.
             # GPU mode is intentionally disabled (upstream marks it as not fully tested).
             log('info', "Supertonic: Using CPU for inference")
-            self._tts_engine = load_text_to_speech(onnx_dir, use_gpu=False)
+            self._tts_engine = load_text_to_speech(onnx_dir, use_gpu=False, num_threads=self.onnx_threads)
             
         except Exception as e:
             log('error', f"Failed to load Supertonic models: {e}")
@@ -363,6 +367,17 @@ class SupertonicPlugin(PluginBase):
                                 multi_select=False,
                             ),
                             NumericalSetting(
+                                key='onnx_threads',
+                                label='CPU Threads',
+                                type='number',
+                                readonly=False,
+                                placeholder=str(DEFAULT_ONNX_THREADS),
+                                default_value=DEFAULT_ONNX_THREADS,
+                                min_value=1,
+                                max_value=max(1, os.cpu_count() or 1),
+                                step=1,
+                            ),
+                            NumericalSetting(
                                 key='speed',
                                 label='Speed',
                                 type='number',
@@ -447,8 +462,9 @@ class SupertonicPlugin(PluginBase):
             voice = settings.get('voice', 'M1')
             language = settings.get('language', 'en')
             speed = float(settings.get('speed', 1.0))
+            onnx_threads = int(settings.get('onnx_threads', DEFAULT_ONNX_THREADS))
             
-            return SupertonicTTSModel(model_dir=model_dir, voice=voice, speed=speed, language=language)
+            return SupertonicTTSModel(model_dir=model_dir, voice=voice, speed=speed, language=language, onnx_threads=onnx_threads)
             
         raise ValueError(f'Unknown Supertonic provider: {provider_id}')
 
@@ -458,7 +474,7 @@ if __name__ == "__main__":
     sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "deps")
     plugin_manifest = PluginManifest(
         name="Supertonic TTS Plugin",
-        version="0.1.2",
+        version="0.1.3",
         author="COVAS:NEXT",
         description="Supertonic TTS Plugin for COVAS:NEXT"
     )
