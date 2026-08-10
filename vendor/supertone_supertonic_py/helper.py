@@ -320,7 +320,7 @@ def load_text_processor(onnx_dir: str) -> UnicodeProcessor:
 
 
 def load_text_to_speech(
-    onnx_dir: str, use_gpu: bool = False, num_threads: int = max(1, (os.cpu_count() or 1) // 2)
+    onnx_dir: str, use_gpu: bool = False, num_threads: int = min(4, max(1, (os.cpu_count() or 1) // 2))
 ) -> TextToSpeech:
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = max(1, int(num_threads))
